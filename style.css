@@ -1,0 +1,811 @@
+/* ==========================================================================
+   Tello Drone Simulator — overlay UI
+
+   Everything the user touches is frosted glass over a live 3D scene. No
+   gradients anywhere: a single flat translucent tint per surface, a bright
+   hairline top edge, and a dark hairline ring on the outside. That pairing is
+   what gives each panel a defined shape against a busy, moving background.
+
+   The tint is dark rather than light on purpose. A light tint reads well over
+   the near-black floor but washes out over the bright sky band near the
+   horizon; a dark tint darkens whatever is behind it, so the light text holds
+   contrast in both cases. Nothing is fully opaque — the scene still shows
+   through. Nothing is fully transparent.
+
+   Colour system
+     amber  --signal   momentary engagement: any button held, focus, progress
+     mint   --go       takeoff, "flying", the auto-cam ON lamp
+     coral  --stop     land
+     red    --alert    errors only
+
+   The scene is navy with blue accent lights, so the interaction colour is
+   deliberately warm: a held control can never be mistaken for something in
+   the world behind it.
+   ========================================================================== */
+
+:root {
+  --bg: #080d15;
+
+  /* ---- glass -------------------------------------------------------- */
+  --glass: rgba(16, 22, 33, 0.46);
+  --glass-btn: rgba(236, 243, 255, 0.13);
+  --glass-edge: rgba(255, 255, 255, 0.16);
+  --glass-edge-hi: rgba(255, 255, 255, 0.32);
+
+  --ring: 0 0 0 0.0625rem rgba(3, 7, 14, 0.62);
+  --lift: 0 0.75rem 2rem -0.5rem rgba(2, 5, 12, 0.68);
+  --lift-sm: 0 0.25rem 0.875rem -0.25rem rgba(2, 5, 12, 0.6);
+  --edge-top: inset 0 0.0625rem 0 rgba(255, 255, 255, 0.28);
+  --edge-bottom: inset 0 -0.0625rem 0 rgba(255, 255, 255, 0.05);
+
+  --blur: saturate(170%) contrast(105%) blur(1rem);
+
+  /* ---- ink ---------------------------------------------------------- */
+  --text: #edf2f9;
+  --text-dim: #93a3b8;
+  --text-faint: #6b7c93;
+
+  /* ---- signals ------------------------------------------------------ */
+  --signal: #ffb238;
+  --signal-ink: #1c1104;
+  --go: #4fe3b0;
+  --stop: #ff6f5e;
+  --caution: #ffd166;
+  --alert: #ff4d4d;
+
+  --radius: 0.875rem;
+  --pad-btn: 3.4rem;
+
+  --actions-pad: 0.45rem;
+  --actions-btn-h: 3.5rem;
+
+  --safe-t: env(safe-area-inset-top, 0rem);
+  --safe-r: env(safe-area-inset-right, 0rem);
+  --safe-b: env(safe-area-inset-bottom, 0rem);
+  --safe-l: env(safe-area-inset-left, 0rem);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-synthesis-weight: none;
+  overscroll-behavior: none;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+}
+
+#app {
+  position: fixed;
+  inset: 0;
+  /* The camera-gesture surface. Drags on empty space orbit the view. */
+  cursor: grab;
+}
+
+#app:active {
+  cursor: grabbing;
+}
+
+#viewport {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+}
+
+/* ------------------------------------------------------------- overlay --- */
+
+#overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  grid-template-rows: auto 1fr auto;
+  /* Middle row is an empty flexible spacer — it just gives the viewport
+     breathing room between the top and bottom control clusters. #toast lives
+     inside #actions now (see its own rule), not in this grid. */
+  grid-template-areas:
+    "hud     topbar   ."
+    ".       .        ."
+    "padleft actions  padright";
+  gap: 0.75rem;
+  padding: calc(var(--safe-t) + 0.75rem) calc(var(--safe-r) + 0.75rem)
+    calc(var(--safe-b) + 0.75rem) calc(var(--safe-l) + 0.75rem);
+  /* Only controls are interactive; empty space passes through to the camera. */
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.5s ease;
+}
+
+#overlay.is-ready {
+  opacity: 1;
+}
+
+/* --------------------------------------------------------------- glass --- */
+
+.panel {
+  pointer-events: auto;
+  cursor: default;
+  position: relative;
+  background: var(--glass);
+  border: 0.0625rem solid var(--glass-edge);
+  border-radius: var(--radius);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+  box-shadow: var(--ring), var(--lift), var(--edge-top), var(--edge-bottom);
+}
+
+/* ----------------------------------------------------------------- HUD --- */
+
+#hud {
+  grid-area: hud;
+  min-width: 15.5rem;
+  padding: 0.6rem 0.85rem 0.55rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.hud-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* Small live lamp so the HUD has a fixed anchor point. */
+.hud-lamp {
+  width: 0.4rem;
+  height: 0.4rem;
+  flex: none;
+  border-radius: 50%;
+  background: var(--signal);
+  box-shadow: 0 0 0 0.1875rem rgba(255, 178, 56, 0.14);
+}
+
+.hud-label {
+  display: block;
+  color: var(--text-dim);
+  font-size: 0.625rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  line-height: 1;
+}
+
+.hud-head .hud-label {
+  margin-right: auto;
+}
+
+.hud-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0 0.6rem;
+  margin: 0.55rem 0 0.5rem;
+  padding: 0.55rem 0 0.1rem;
+  border-top: 0.0625rem solid rgba(255, 255, 255, 0.1);
+}
+
+.hud-cell {
+  display: grid;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+.hud-cell + .hud-cell {
+  padding-left: 0.6rem;
+  border-left: 0.0625rem solid rgba(255, 255, 255, 0.08);
+  margin-left: -0.6rem;
+}
+
+.hud-value {
+  font-size: 0.9375rem;
+  font-weight: 620;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.hud-foot {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding-top: 0.45rem;
+  border-top: 0.0625rem solid rgba(255, 255, 255, 0.08);
+}
+
+.hud-foot-item {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.hud-foot-item:last-child {
+  margin-left: auto;
+  overflow: hidden;
+}
+
+.hud-value--sm {
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.hud-value--dim {
+  color: var(--text-dim);
+  font-size: 0.6875rem;
+  font-weight: 550;
+  letter-spacing: 0.02em;
+  text-overflow: ellipsis;
+  overflow: hidden;
+}
+
+/* Status — the one place a colour states the whole flight condition. No chip:
+   it is a HUD value like the others, just coloured. */
+.hud-value--state {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  white-space: nowrap;
+  transition: color 0.2s ease;
+}
+
+.hud-value--state[data-state="landed"] {
+  color: var(--text-dim);
+}
+
+.hud-value--state[data-state="takingOff"],
+.hud-value--state[data-state="landing"] {
+  color: var(--caution);
+}
+
+.hud-value--state[data-state="flying"] {
+  color: var(--go);
+}
+
+.hud-value--state[data-state="flipping"] {
+  color: var(--signal);
+}
+
+/* ------------------------------------------------------------- buttons --- */
+
+.btn {
+  pointer-events: auto;
+  position: relative;
+  appearance: none;
+  margin: 0;
+  border: 0.0625rem solid var(--glass-edge);
+  border-radius: var(--radius);
+  background: var(--glass-btn);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  touch-action: none;
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+  box-shadow: var(--ring), var(--lift-sm), var(--edge-top), var(--edge-bottom);
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.16s ease, transform 0.1s ease, color 0.16s ease,
+    border-color 0.16s ease, box-shadow 0.16s ease, filter 0.2s ease,
+    opacity 0.2s ease;
+}
+
+/* Glyphs and labels never become the event target. */
+.btn > * {
+  pointer-events: none;
+}
+
+.btn-glyph {
+  font-size: 1.05rem;
+  line-height: 1;
+}
+
+.btn-text {
+  font-size: 0.75rem;
+  font-weight: 650;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+
+.btn:not(:disabled):hover {
+  background: rgba(236, 243, 255, 0.18);
+  border-color: var(--glass-edge-hi);
+}
+
+.btn:focus-visible {
+  outline: 0.125rem solid var(--signal);
+  outline-offset: 0.1875rem;
+}
+
+/* Held. One language for every control: flat amber, dark ink, pressed in. */
+.btn:not(:disabled).is-active,
+.btn:not(:disabled):active {
+  background: var(--signal);
+  border-color: rgba(255, 226, 176, 0.9);
+  color: var(--signal-ink);
+  transform: scale(0.93);
+  box-shadow: 0 0 0 0.0625rem rgba(122, 60, 8, 0.55), 0 0 0 0.25rem rgba(255, 178, 56, 0.2),
+    inset 0 0.0625rem 0 rgba(255, 255, 255, 0.5);
+}
+
+.btn:not(:disabled).is-active .btn-glyph,
+.btn:not(:disabled).is-active .btn-text {
+  color: var(--signal-ink);
+}
+
+/* Unavailable. Drained of colour and light, but still a visible surface —
+   the flight state machine leans on this, so it must read at a glance. */
+.btn:disabled {
+  cursor: not-allowed;
+  filter: grayscale(1);
+  opacity: 0.4;
+  color: var(--text-faint);
+  background: rgba(150, 168, 192, 0.07);
+  border-color: rgba(255, 255, 255, 0.07);
+  box-shadow: var(--ring), inset 0 0.0625rem 0 rgba(255, 255, 255, 0.06);
+}
+
+/* Flight-action identities — a flat tint plus a coloured glyph, both light
+   enough that .is-active still reads as a clear state change. */
+.btn--primary:not(:disabled) {
+  background: rgba(79, 227, 176, 0.16);
+  border-color: rgba(122, 240, 205, 0.45);
+  color: #dffff4;
+}
+.btn--primary:not(:disabled):hover {
+  background: rgba(79, 227, 176, 0.23);
+}
+.btn--primary:not(:disabled) .btn-glyph {
+  color: var(--go);
+}
+
+.btn--danger:not(:disabled) {
+  background: rgba(255, 111, 94, 0.16);
+  border-color: rgba(255, 158, 142, 0.45);
+  color: #ffe6e0;
+}
+.btn--danger:not(:disabled):hover {
+  background: rgba(255, 111, 94, 0.23);
+}
+.btn--danger:not(:disabled) .btn-glyph {
+  color: var(--stop);
+}
+
+.btn--ghost:not(:disabled) .btn-glyph {
+  color: #c4d5e8;
+}
+
+/* ------------------------------------------------------- camera topbar --- */
+
+#topbar {
+  grid-area: topbar;
+  justify-self: center;
+  align-self: start;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.4rem 0.35rem 0.35rem;
+}
+
+.btn--toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.44rem 0.75rem;
+  color: var(--text-dim);
+}
+
+.btn--toggle .btn-glyph {
+  font-size: 0.9rem;
+}
+
+.btn--toggle .btn-text {
+  font-size: 0.6875rem;
+}
+
+.toggle-pip {
+  width: 0.4rem;
+  height: 0.4rem;
+  flex: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.22);
+  box-shadow: inset 0 0 0 0.0625rem rgba(0, 0, 0, 0.3);
+  transition: background 0.22s ease, box-shadow 0.22s ease;
+}
+
+/* Persistent ON uses mint; momentary engagement stays amber. */
+.btn--toggle.is-on {
+  color: var(--text);
+  background: rgba(79, 227, 176, 0.16);
+  border-color: rgba(122, 240, 205, 0.42);
+}
+
+.btn--toggle.is-on .toggle-pip {
+  background: var(--go);
+  box-shadow: 0 0 0 0.125rem rgba(79, 227, 176, 0.2);
+}
+
+.zoom {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0 0.45rem 0 0.2rem;
+}
+
+.zoom-icon {
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.zoom-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 7rem;
+  height: 1.6rem;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.zoom-slider::-webkit-slider-runnable-track {
+  height: 0.3125rem;
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.16);
+  box-shadow: inset 0 0.0625rem 0.125rem rgba(0, 0, 0, 0.5);
+}
+.zoom-slider::-moz-range-track {
+  height: 0.3125rem;
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.16);
+  box-shadow: inset 0 0.0625rem 0.125rem rgba(0, 0, 0, 0.5);
+}
+
+.zoom-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 1.15rem;
+  height: 1.15rem;
+  margin-top: -0.42rem;
+  border: 0.0625rem solid rgba(255, 255, 255, 0.6);
+  border-radius: var(--radius);
+  background: #e9eff8;
+  box-shadow: 0 0.125rem 0.5rem rgba(2, 6, 14, 0.65), 0 0 0 0.0625rem rgba(3, 7, 14, 0.5);
+}
+.zoom-slider::-moz-range-thumb {
+  width: 1.15rem;
+  height: 1.15rem;
+  border: 0.0625rem solid rgba(255, 255, 255, 0.6);
+  border-radius: var(--radius);
+  background: #e9eff8;
+  box-shadow: 0 0.125rem 0.5rem rgba(2, 6, 14, 0.65), 0 0 0 0.0625rem rgba(3, 7, 14, 0.5);
+}
+
+.zoom-slider:active::-webkit-slider-thumb {
+  background: var(--signal);
+  box-shadow: 0 0.125rem 0.5rem rgba(2, 6, 14, 0.65), 0 0 0 0.3125rem rgba(255, 178, 56, 0.24);
+}
+.zoom-slider:active::-moz-range-thumb {
+  background: var(--signal);
+  box-shadow: 0 0.125rem 0.5rem rgba(2, 6, 14, 0.65), 0 0 0 0.3125rem rgba(255, 178, 56, 0.24);
+}
+
+.zoom-slider:focus-visible {
+  outline: 0.125rem solid var(--signal);
+  outline-offset: 0.125rem;
+  border-radius: var(--radius);
+}
+
+/* ----------------------------------------------------- action cluster --- */
+
+#actions {
+  grid-area: actions;
+  align-self: end;
+  justify-self: center;
+  display: grid;
+  /* Flip L · Takeoff-Land · Flip R — one merged flight control, dead centre
+     under the thumb, with the two flips flanking it. */
+  grid-template-columns: repeat(3, minmax(4.75rem, 1fr));
+  gap: var(--actions-pad);
+  padding: var(--actions-pad);
+}
+
+#actions .btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  min-height: var(--actions-btn-h);
+  padding: 0.45rem 0.5rem;
+}
+
+#actions .btn-glyph {
+  font-size: 1.15rem;
+}
+
+/* --------------------------------------------------------------- pads --- */
+
+.pad {
+  align-self: end;
+  /* Column 1 is also sized by #hud, so pin the pad instead of letting it
+     stretch — otherwise the cross and its title drift off-centre. */
+  justify-self: start;
+  width: max-content;
+  padding: 0.45rem 0.45rem 0.55rem;
+}
+
+#pad-left {
+  grid-area: padleft;
+}
+
+#pad-right {
+  grid-area: padright;
+  justify-self: end;
+}
+
+.pad-title {
+  display: block;
+  margin-bottom: 0.35rem;
+  color: var(--text-dim);
+  font-size: 0.625rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.pad-grid {
+  display: grid;
+  grid-template-columns: repeat(3, var(--pad-btn));
+  grid-template-rows: repeat(3, var(--pad-btn));
+  gap: 0.3rem;
+  grid-template-areas:
+    ".  n  ."
+    "w hub e"
+    ".  s  .";
+}
+
+.pad-n {
+  grid-area: n;
+}
+.pad-s {
+  grid-area: s;
+}
+.pad-w {
+  grid-area: w;
+}
+.pad-e {
+  grid-area: e;
+}
+
+.pad-grid .btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.2rem;
+  line-height: 1;
+}
+
+.pad-hub {
+  grid-area: hub;
+  border-radius: var(--radius);
+  border: 0.0625rem solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+/* -------------------------------------------------------------- toast --- */
+
+#toast {
+  /* A child of #actions (see Simulator.jsx), not a sibling positioned off the
+     overlay — centring on the viewport instead of the bar's own box is what
+     let the two drift apart: the grid's left and right gutters aren't the
+     same width (the HUD panel and the pad aren't the same size), so the
+     bar's actual centre and the viewport's centre are two different points.
+     Anchored to #actions's own box, this holds regardless of gutter width,
+     breakpoint, zoom or how the actions bar itself gets repositioned. */
+  position: absolute;
+  left: 50%;
+  bottom: 100%;
+  margin-bottom: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  transform: translate(-50%, 0.65rem);
+  padding: 0.5rem 0.95rem 0.52rem;
+  border: 0.0625rem solid var(--glass-edge);
+  border-radius: var(--radius);
+  background: rgba(16, 22, 33, 0.58);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+  box-shadow: var(--ring), var(--lift), var(--edge-top);
+  font-size: 0.8125rem;
+  font-weight: 620;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.22s ease, transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+#toast.is-visible {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+/* ------------------------------------------------------------- loader --- */
+
+#loader {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: var(--bg);
+  transition: opacity 0.55s ease, visibility 0.55s ease;
+}
+
+#loader.is-hidden {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.loader-inner {
+  width: min(20rem, 78vw);
+  text-align: center;
+}
+
+.loader-title {
+  margin-bottom: 1.15rem;
+  font-size: 0.9375rem;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+
+.loader-track {
+  height: 0.1875rem;
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+
+#loader-bar {
+  width: 0%;
+  height: 100%;
+  border-radius: var(--radius);
+  background: var(--signal);
+  transition: width 0.25s ease, background 0.3s ease;
+}
+
+#loader-text {
+  margin-top: 0.8rem;
+  color: var(--text-dim);
+  font-size: 0.75rem;
+  font-weight: 550;
+  letter-spacing: 0.06em;
+}
+
+#loader.is-error #loader-bar {
+  width: 100% !important;
+  background: var(--alert);
+}
+#loader.is-error #loader-text {
+  color: var(--alert);
+}
+
+/* --------------------------------------------------------- responsive --- */
+
+/* Short landscape (phone held sideways) — vertical space is the constraint. */
+@media (max-height: 28.75rem) {
+  :root {
+    --pad-btn: 2.85rem;
+    --actions-pad: 0.4rem;
+    --actions-btn-h: 2.85rem;
+  }
+  #overlay {
+    gap: 0.5rem;
+  }
+  #hud {
+    min-width: 13.5rem;
+    padding: 0.5rem 0.7rem 0.45rem;
+  }
+  #hud .hud-foot {
+    display: none;
+  }
+  .hud-grid {
+    margin: 0.45rem 0 0;
+    padding-bottom: 0;
+  }
+  .hud-value {
+    font-size: 0.875rem;
+  }
+  #actions {
+    grid-template-columns: repeat(3, minmax(4rem, 1fr));
+  }
+  #actions .btn {
+    gap: 0.2rem;
+  }
+  #actions .btn-glyph {
+    font-size: 1rem;
+  }
+  .btn-text {
+    font-size: 0.6875rem;
+  }
+  .pad {
+    padding: 0.4rem 0.4rem 0.45rem;
+  }
+}
+
+/* Narrow portrait — pads own the bottom corners (thumbs), actions sit in a
+   band just above them, top bar spans the width. Centre stays empty. */
+@media (max-width: 38.75rem) {
+  :root {
+    --pad-btn: 3.05rem;
+    --actions-btn-h: 3.1rem;
+  }
+  #overlay {
+    grid-template-rows: auto auto 1fr auto auto;
+    grid-template-areas:
+      "hud     hud     hud"
+      "topbar  topbar  topbar"
+      ".       .       ."
+      "actions actions actions"
+      "padleft .       padright";
+    gap: 0.6rem;
+  }
+  #hud {
+    min-width: 0;
+    justify-self: stretch;
+  }
+  .hud-grid {
+    gap: 0 0.85rem;
+  }
+  #topbar {
+    justify-self: center;
+  }
+  #actions {
+    justify-self: stretch;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .zoom-slider {
+    width: 5.5rem;
+  }
+}
+
+/* Very narrow phones — keep the four action labels from wrapping. */
+@media (max-width: 23.75rem) {
+  :root {
+    --pad-btn: 2.85rem;
+  }
+  .btn-text {
+    font-size: 0.625rem;
+    letter-spacing: 0.02em;
+  }
+  #hud {
+    padding: 0.55rem 0.7rem 0.5rem;
+  }
+  .hud-value {
+    font-size: 0.875rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

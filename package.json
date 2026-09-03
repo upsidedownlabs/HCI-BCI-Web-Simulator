@@ -1,0 +1,25 @@
+{
+  "name": "tello-drone-simulator",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Mobile-optimised 3D drone simulator — Three.js (WebGPU/WebGL) + Rapier physics",
+  "scripts": {
+    "dev": "next dev -H 0.0.0.0 -p 5173",
+    "build": "next build",
+    "preview": "serve out -l 4173",
+    "test": "node tests/flight-model.mjs",
+    "test:browser": "node tests/browser-smoke.mjs"
+  },
+  "dependencies": {
+    "@dimforge/rapier3d-compat": "^0.19.3",
+    "next": "^16.3.3",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "three": "^0.185.1"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^24.0.0",
+    "serve": "^14.2.6"
+  }
+}
