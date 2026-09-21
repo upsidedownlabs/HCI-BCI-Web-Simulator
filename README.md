@@ -28,7 +28,8 @@ Built with [Next.js](https://nextjs.org/), [Three.js](https://threejs.org/) (Web
 ## Running locally
 
 ```bash
-npm install or npm i
+npm install
+# Alternatively, run: npm i
 npm run dev
 ```
 
